@@ -135,16 +135,21 @@ class DatabaseExporter:
         guild_id = message_payload.get("guild_id")
         guild = message_payload.get("guild")
         channel = message_payload.get("channel")
-        author = message_payload["author"]
-        channel_id = int(message_payload["channel_id"])
+        author = message_payload.get("author")
+        channel_id_value = message_payload.get("channel_id")
+        if not isinstance(author, dict) or "id" not in author or channel_id_value is None:
+            return
+        channel_id = int(channel_id_value)
         author_id = int(author["id"])
+        guild_data = guild if isinstance(guild, dict) else None
+        channel_data = channel if isinstance(channel, dict) else None
 
         with self.connection.cursor() as cursor:
             if guild_id is not None:
                 guild_id = int(guild_id)
-                guild_name = guild.get("name") if isinstance(guild, dict) else None
-                guild_icon = guild.get("icon") if isinstance(guild, dict) else None
-                raw_guild = json.dumps(guild) if isinstance(guild, dict) else None
+                guild_name = guild_data.get("name") if guild_data is not None else None
+                guild_icon = guild_data.get("icon") if guild_data is not None else None
+                raw_guild = json.dumps(guild_data) if guild_data is not None else None
                 cursor.execute(
                     sql.SQL(
                         "INSERT INTO {guild_table}"
@@ -159,9 +164,9 @@ class DatabaseExporter:
                     (guild_id, guild_name, guild_icon, raw_guild, observed_at, observed_at),
                 )
 
-            channel_name = channel.get("name") if isinstance(channel, dict) else None
-            channel_type = channel.get("type") if isinstance(channel, dict) else None
-            raw_channel = json.dumps(channel) if isinstance(channel, dict) else None
+            channel_name = channel_data.get("name") if channel_data is not None else None
+            channel_type = channel_data.get("type") if channel_data is not None else None
+            raw_channel = json.dumps(channel_data) if channel_data is not None else None
             cursor.execute(
                 sql.SQL(
                     "INSERT INTO {channel_table}"
