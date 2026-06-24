@@ -21,6 +21,7 @@ REQUIRED_ENVIRONMENT_VARIABLES = (
 )
 DISCORD_EPOCH_MS = 1420070400000  # 2015-01-01T00:00:00Z
 REST_MESSAGES_URL_PATTERN = re.compile(r"https://discord.com/api/v\d+/channels/(\d+)/messages(?:\?|$)")
+QUEUE_NOTIFY_CHANNEL = "raw_message_queue_channel"
 
 
 def load_required_environment():
@@ -280,7 +281,7 @@ class DatabaseExporter:
         self.flush_batch(message_rows, guild_rows, channel_rows, author_rows)
 
     def _setup_listen(self):
-        self.connection.execute("LISTEN raw_message_queue_channel")
+        self.connection.execute(sql.SQL("LISTEN {}").format(sql.Identifier(QUEUE_NOTIFY_CHANNEL)))
 
     def run_forever(self):
         logger.info("DB exporter started (queue table: %s)", self.queue_table)
