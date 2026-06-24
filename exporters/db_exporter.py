@@ -132,21 +132,29 @@ class DatabaseExporter:
             )
 
     def upsert_message_lookups(self, observed_at, message_payload: dict):
-        guild_id = message_payload.get("guild_id")
+        guild_id_value = message_payload.get("guild_id")
         guild = message_payload.get("guild")
         channel = message_payload.get("channel")
         author = message_payload.get("author")
         channel_id_value = message_payload.get("channel_id")
         if not isinstance(author, dict) or "id" not in author or channel_id_value is None:
             return
-        channel_id = int(channel_id_value)
-        author_id = int(author["id"])
+        try:
+            channel_id = int(channel_id_value)
+            author_id = int(author["id"])
+        except (TypeError, ValueError):
+            return
+        guild_id = None
+        if guild_id_value is not None:
+            try:
+                guild_id = int(guild_id_value)
+            except (TypeError, ValueError):
+                guild_id = None
         guild_data = guild if isinstance(guild, dict) else None
         channel_data = channel if isinstance(channel, dict) else None
 
         with self.connection.cursor() as cursor:
             if guild_id is not None:
-                guild_id = int(guild_id)
                 guild_name = guild_data.get("name") if guild_data is not None else None
                 guild_icon = guild_data.get("icon") if guild_data is not None else None
                 raw_guild = json.dumps(guild_data) if guild_data is not None else None

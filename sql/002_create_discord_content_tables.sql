@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS discord_authors (
     is_bot BOOLEAN,
     raw_author JSONB,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_seen_at TIMESTAMPTZ NOT NULL
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS discord_channels (
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS discord_channels (
     channel_type INTEGER,
     raw_channel JSONB,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_seen_at TIMESTAMPTZ NOT NULL
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS discord_channels_guild_idx
@@ -47,5 +47,5 @@ CREATE TABLE IF NOT EXISTS discord_guilds (
     icon TEXT,
     raw_guild JSONB,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_seen_at TIMESTAMPTZ NOT NULL
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
