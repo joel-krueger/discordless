@@ -84,6 +84,17 @@ docker compose up --build
 
 Your mitmproxy certificate will be stored in `~/.mitmproxy`. [Install mitmproxy's certificate](https://docs.mitmproxy.org/stable/concepts-certificates/#quick-setup) on every device with a Discord client that you want to archive with. (Sometimes you also have to install it on the browser level.)
 
+To enable PostgreSQL queueing + DB export in Docker Compose, set these environment variables before `docker compose up`:
+- `DISCORDLESS_DB_HOST`
+- `DISCORDLESS_DB_PORT`
+- `DISCORDLESS_DB_NAME`
+- `DISCORDLESS_DB_USER`
+- `DISCORDLESS_DB_PASSWORD`
+- optional: `DISCORDLESS_DB_QUEUE_TABLE` (defaults to `raw_message_queue`)
+- optional: `DISCORDLESS_DB_MESSAGES_TABLE` (defaults to `discord_messages`)
+
+Then run the SQL setup scripts in `/sql` against your database.
+
 # Usage
 
 ## Step one: data collection - Debian based Linux

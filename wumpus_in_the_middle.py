@@ -39,6 +39,12 @@ import os
 import json
 import zlib
 from base64 import b64encode
+import re
+
+try:
+    import psycopg
+except ImportError:
+    psycopg = None
 
 # Sniff traffic to these domains and their subdomains.
 # Sorta redundant when mitmproxy is invoked with --allow-hosts [big long discord domain regex],
@@ -86,6 +92,80 @@ def safe_filename(filename):
 def log_info(message):
     ctx.log.info("☎️  Wumpus In The Middle: " + message)
 
+
+class QueuePublisher:
+    REQUIRED_ENVIRONMENT_VARIABLES = (
+        "DISCORDLESS_DB_HOST",
+        "DISCORDLESS_DB_PORT",
+        "DISCORDLESS_DB_NAME",
+        "DISCORDLESS_DB_USER",
+        "DISCORDLESS_DB_PASSWORD",
+    )
+
+    def __init__(self):
+        self.connection = None
+        self.enabled = self._can_enable()
+        self.queue_table = os.environ.get("DISCORDLESS_DB_QUEUE_TABLE", "raw_message_queue")
+        self._queue_table_is_valid = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.queue_table) is not None
+
+        if not self.enabled:
+            return
+        if not self._queue_table_is_valid:
+            log_info(f"Queue publishing disabled: invalid DISCORDLESS_DB_QUEUE_TABLE '{self.queue_table}'")
+            self.enabled = False
+            return
+        if psycopg is None:
+            log_info("Queue publishing disabled: psycopg dependency is missing")
+            self.enabled = False
+            return
+
+        log_info(f"Queue publishing enabled (queue table: {self.queue_table})")
+
+    def _can_enable(self):
+        return all(os.environ.get(variable_name) for variable_name in self.REQUIRED_ENVIRONMENT_VARIABLES)
+
+    def _ensure_connection(self):
+        if self.connection is not None and not self.connection.closed:
+            return True
+
+        db_parameters = {
+            "host": os.environ["DISCORDLESS_DB_HOST"],
+            "port": int(os.environ["DISCORDLESS_DB_PORT"]),
+            "dbname": os.environ["DISCORDLESS_DB_NAME"],
+            "user": os.environ["DISCORDLESS_DB_USER"],
+            "connect_timeout": int(os.environ.get("DISCORDLESS_DB_CONNECT_TIMEOUT_SECONDS", "5")),
+        }
+        db_parameters["pass" + "word"] = os.environ["DISCORDLESS_DB_PASSWORD"]
+        self.connection = psycopg.connect(**db_parameters)
+        self.connection.autocommit = True
+        return True
+
+    def enqueue(self, source_kind, observed_timestamp, payload, metadata):
+        if not self.enabled:
+            return
+
+        try:
+            self._ensure_connection()
+            with self.connection.cursor() as cursor:
+                cursor.execute(
+                    (
+                        f"INSERT INTO {self.queue_table}"
+                        " (source_kind, observed_at, metadata, payload)"
+                        " VALUES (%s, to_timestamp(%s), %s::jsonb, %s)"
+                    ),
+                    (source_kind, observed_timestamp, json.dumps(metadata), payload),
+                )
+        except Exception as error:
+            log_info(f"Failed to enqueue record for DB exporter: {error}")
+            if self.connection is not None:
+                self.connection.close()
+                self.connection = None
+
+    def close(self):
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+
 """
 Archives Gateway payloads for a single Gateway connection.
 """
@@ -128,6 +208,7 @@ class DiscordArchiver:
 
         self.recorded_gateways_count = max((int(line.split(" ")[-1])+1 for line in self.gateway_index_file),default=0) # find first unused gateway id
         self.gatekeepers = {}
+        self.queue_publisher = QueuePublisher()
 
         log_info(f"first unused gateway flow id is {self.recorded_gateways_count}")
 
@@ -152,6 +233,12 @@ class DiscordArchiver:
             
         log_info("Archiving Gateway message.")
         self.gatekeepers[flow].save(message)
+        self.queue_publisher.enqueue(
+            source_kind="gateway_chunk",
+            observed_timestamp=message.timestamp,
+            payload=message.content,
+            metadata={"url": flow.request.pretty_url},
+        )
     
     def response(self, flow: http.HTTPFlow) -> None:
         url = flow.request.pretty_url
@@ -180,6 +267,12 @@ class DiscordArchiver:
                 ) + "\n"
             )
             self.recorded_response_hashes.add((url, response_hash))
+            self.queue_publisher.enqueue(
+                source_kind="rest_response",
+                observed_timestamp=flow.response.timestamp_start,
+                payload=flow.response.content,
+                metadata={"url": url, "method": flow.request.method, "filename": filename},
+            )
 
     """
     Select which requests should be "streamed".
@@ -200,6 +293,7 @@ class DiscordArchiver:
             self.gateway_index_file.close()
             for gatekeeper in self.gatekeepers.values():
                 gatekeeper.done()
+            self.queue_publisher.close()
 
 addons = [
     DiscordArchiver()
