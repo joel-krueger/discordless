@@ -92,8 +92,12 @@ To enable PostgreSQL queueing + DB export in Docker Compose, set these environme
 - `DISCORDLESS_DB_PASSWORD`
 - optional: `DISCORDLESS_DB_QUEUE_TABLE` (defaults to `raw_message_queue`)
 - optional: `DISCORDLESS_DB_MESSAGES_TABLE` (defaults to `discord_messages`)
+- optional: `DISCORDLESS_DB_AUTHORS_TABLE` (defaults to `discord_authors`)
+- optional: `DISCORDLESS_DB_CHANNELS_TABLE` (defaults to `discord_channels`)
+- optional: `DISCORDLESS_DB_GUILDS_TABLE` (defaults to `discord_guilds`)
 
 Then run the SQL setup scripts in `/sql` against your database.
+`sql/002_create_discord_content_tables.sql` creates both `discord_messages` and lookup tables for readable IDs (`discord_authors`, `discord_channels`, `discord_guilds`), which the DB exporter keeps up to date as data is observed.
 
 # Usage
 
