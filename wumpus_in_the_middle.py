@@ -43,8 +43,10 @@ import re
 
 try:
     import psycopg
+    from psycopg import sql
 except ImportError:
     psycopg = None
+    sql = None
 
 # Sniff traffic to these domains and their subdomains.
 # Sorta redundant when mitmproxy is invoked with --allow-hosts [big long discord domain regex],
@@ -106,11 +108,11 @@ class QueuePublisher:
         self.connection = None
         self.enabled = self._can_enable()
         self.queue_table = os.environ.get("DISCORDLESS_DB_QUEUE_TABLE", "raw_message_queue")
-        self._queue_table_is_valid = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.queue_table) is not None
+        queue_table_is_valid = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.queue_table) is not None
 
         if not self.enabled:
             return
-        if not self._queue_table_is_valid:
+        if not queue_table_is_valid:
             log_info(f"Queue publishing disabled: invalid DISCORDLESS_DB_QUEUE_TABLE '{self.queue_table}'")
             self.enabled = False
             return
@@ -128,15 +130,15 @@ class QueuePublisher:
         if self.connection is not None and not self.connection.closed:
             return True
 
-        db_parameters = {
+        connection_kwargs = {
             "host": os.environ["DISCORDLESS_DB_HOST"],
             "port": int(os.environ["DISCORDLESS_DB_PORT"]),
             "dbname": os.environ["DISCORDLESS_DB_NAME"],
             "user": os.environ["DISCORDLESS_DB_USER"],
+            "password": os.environ["DISCORDLESS_DB_PASSWORD"],
             "connect_timeout": int(os.environ.get("DISCORDLESS_DB_CONNECT_TIMEOUT_SECONDS", "5")),
         }
-        db_parameters["pass" + "word"] = os.environ["DISCORDLESS_DB_PASSWORD"]
-        self.connection = psycopg.connect(**db_parameters)
+        self.connection = psycopg.connect(**connection_kwargs)
         self.connection.autocommit = True
         return True
 
@@ -148,15 +150,17 @@ class QueuePublisher:
             self._ensure_connection()
             with self.connection.cursor() as cursor:
                 cursor.execute(
-                    (
-                        f"INSERT INTO {self.queue_table}"
-                        " (source_kind, observed_at, metadata, payload)"
-                        " VALUES (%s, to_timestamp(%s), %s::jsonb, %s)"
-                    ),
+                    sql.SQL(
+                        "INSERT INTO {} (source_kind, observed_at, metadata, payload) "
+                        "VALUES (%s, to_timestamp(%s), %s::jsonb, %s)"
+                    ).format(sql.Identifier(self.queue_table)),
                     (source_kind, observed_timestamp, json.dumps(metadata), payload),
                 )
         except Exception as error:
-            log_info(f"Failed to enqueue record for DB exporter: {error}")
+            log_info(
+                f"Failed to enqueue '{source_kind}' record at {observed_timestamp} "
+                f"for DB exporter (url={metadata.get('url', 'n/a')}): {error}"
+            )
             if self.connection is not None:
                 self.connection.close()
                 self.connection = None

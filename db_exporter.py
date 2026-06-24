@@ -4,9 +4,9 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlparse
 
 import psycopg
+from psycopg import sql
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -19,6 +19,8 @@ REQUIRED_ENVIRONMENT_VARIABLES = (
     "DISCORDLESS_DB_USER",
     "DISCORDLESS_DB_PASSWORD",
 )
+DISCORD_EPOCH_MS = 1420070400000  # 2015-01-01T00:00:00Z
+REST_MESSAGES_URL_PATTERN = re.compile(r"https://discord.com/api/v\d+/channels/(\d+)/messages(?:\?|$)")
 
 
 def load_required_environment():
@@ -40,14 +42,14 @@ def connect():
         "port": int(os.environ["DISCORDLESS_DB_PORT"]),
         "dbname": os.environ["DISCORDLESS_DB_NAME"],
         "user": os.environ["DISCORDLESS_DB_USER"],
+        "password": os.environ["DISCORDLESS_DB_PASSWORD"],
         "connect_timeout": int(os.environ.get("DISCORDLESS_DB_CONNECT_TIMEOUT_SECONDS", "5")),
     }
-    connection_arguments["pass" + "word"] = os.environ["DISCORDLESS_DB_PASSWORD"]
     return psycopg.connect(**connection_arguments)
 
 
 def snowflake_to_timestamp(snowflake: int) -> datetime:
-    timestamp_seconds = ((snowflake >> 22) + 1420070400000) / 1000
+    timestamp_seconds = ((snowflake >> 22) + DISCORD_EPOCH_MS) / 1000
     return datetime.fromtimestamp(timestamp_seconds, timezone.utc)
 
 
@@ -60,22 +62,30 @@ class DatabaseExporter:
         self.connection = connect()
         self.connection.autocommit = False
 
+    def reconnect(self):
+        try:
+            self.connection.close()
+        except Exception:
+            pass
+        self.connection = connect()
+        self.connection.autocommit = False
+
     def pop_queue_item(self):
         with self.connection.cursor() as cursor:
             cursor.execute(
-                (
-                    f"WITH next_item AS ("
-                    f" SELECT id, source_kind, observed_at, metadata, payload"
-                    f" FROM {self.queue_table}"
-                    f" ORDER BY id"
-                    f" FOR UPDATE SKIP LOCKED"
-                    f" LIMIT 1"
-                    f")"
-                    f" DELETE FROM {self.queue_table} AS queue"
-                    f" USING next_item"
-                    f" WHERE queue.id = next_item.id"
-                    f" RETURNING next_item.source_kind, next_item.observed_at, next_item.metadata, next_item.payload"
-                )
+                sql.SQL(
+                    "WITH next_item AS ("
+                    " SELECT id, source_kind, observed_at, metadata, payload"
+                    " FROM {queue_table}"
+                    " ORDER BY id"
+                    " FOR UPDATE SKIP LOCKED"
+                    " LIMIT 1"
+                    ")"
+                    " DELETE FROM {queue_table} AS queue"
+                    " USING next_item"
+                    " WHERE queue.id = next_item.id"
+                    " RETURNING next_item.source_kind, next_item.observed_at, next_item.metadata, next_item.payload"
+                ).format(queue_table=sql.Identifier(self.queue_table))
             )
             return cursor.fetchone()
 
@@ -91,8 +101,8 @@ class DatabaseExporter:
 
         with self.connection.cursor() as cursor:
             cursor.execute(
-                (
-                    f"INSERT INTO {self.message_table}"
+                sql.SQL(
+                    "INSERT INTO {message_table}"
                     " (message_id, channel_id, guild_id, author_id, content, created_at, observed_at, source_kind, raw_message)"
                     " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)"
                     " ON CONFLICT (message_id) DO UPDATE SET"
@@ -104,7 +114,7 @@ class DatabaseExporter:
                     " observed_at = EXCLUDED.observed_at,"
                     " source_kind = EXCLUDED.source_kind,"
                     " raw_message = EXCLUDED.raw_message"
-                ),
+                ).format(message_table=sql.Identifier(self.message_table)),
                 (
                     message_id,
                     channel_id,
@@ -120,24 +130,32 @@ class DatabaseExporter:
 
     def parse_rest_messages(self, observed_at, metadata, payload):
         request_url = (metadata or {}).get("url", "")
-        match = re.match(r"https://discord.com/api/v\d+/channels/(\d+)/messages(?:\?|$)", request_url)
+        match = REST_MESSAGES_URL_PATTERN.match(request_url)
         if not match:
             return
 
         channel_id = int(match.group(1))
-        decoded_payload = payload.decode("utf-8", errors="strict")
-        parsed = json.loads(decoded_payload)
+        try:
+            decoded_payload = payload.decode("utf-8", errors="strict")
+            parsed = json.loads(decoded_payload)
+        except Exception as error:
+            logger.warning("Failed to parse rest_response at %s for url %s: %s", observed_at, request_url, error)
+            return
         messages = parsed if isinstance(parsed, list) else [parsed]
 
         for message in messages:
             if not isinstance(message, dict) or "id" not in message or "author" not in message:
                 continue
-            message.setdefault("channel_id", str(channel_id))
+            message.setdefault("channel_id", channel_id)
             self.upsert_message(observed_at, "rest_response", message)
 
     def parse_gateway_message_create(self, observed_at, payload):
-        decoded_payload = payload.decode("utf-8", errors="strict")
-        gateway_event = json.loads(decoded_payload)
+        try:
+            decoded_payload = payload.decode("utf-8", errors="strict")
+            gateway_event = json.loads(decoded_payload)
+        except Exception as error:
+            logger.warning("Failed to parse gateway_chunk at %s: %s", observed_at, error)
+            return
         if gateway_event.get("t") != "MESSAGE_CREATE":
             return
         message_data = gateway_event.get("d")
@@ -158,17 +176,19 @@ class DatabaseExporter:
         logger.info("DB exporter started (queue table: %s)", self.queue_table)
         while True:
             try:
+                queue_item = None
                 with self.connection.transaction():
                     queue_item = self.pop_queue_item()
-                    if queue_item is None:
-                        time.sleep(self.poll_interval_seconds)
-                        continue
-                    self.process_queue_item(*queue_item)
+                    if queue_item is not None:
+                        self.process_queue_item(*queue_item)
+                if queue_item is None:
+                    time.sleep(self.poll_interval_seconds)
             except KeyboardInterrupt:
                 logger.info("DB exporter stopped")
                 return
             except Exception:
                 logger.exception("Failed while processing queue item")
+                self.reconnect()
                 time.sleep(self.poll_interval_seconds)
 
 
