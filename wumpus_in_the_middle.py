@@ -156,6 +156,7 @@ class QueuePublisher:
                     ).format(sql.Identifier(self.queue_table)),
                     (source_kind, observed_timestamp, json.dumps(metadata), payload),
                 )
+                cursor.execute("SELECT pg_notify('raw_message_queue_channel', '')")
         except Exception as error:
             log_info(
                 f"Failed to enqueue '{source_kind}' record at {observed_timestamp} "

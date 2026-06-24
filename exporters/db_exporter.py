@@ -73,26 +73,27 @@ class DatabaseExporter:
         self.connection = connect()
         self.connection.autocommit = False
 
-    def pop_queue_item(self):
+    def pop_queue_batch(self, batch_size=100):
         with self.connection.cursor() as cursor:
             cursor.execute(
                 sql.SQL(
-                    "WITH next_item AS ("
+                    "WITH next_items AS ("
                     " SELECT id, source_kind, observed_at, metadata, payload"
                     " FROM {queue_table}"
                     " ORDER BY id"
                     " FOR UPDATE SKIP LOCKED"
-                    " LIMIT 1"
+                    " LIMIT %s"
                     ")"
                     " DELETE FROM {queue_table} AS queue"
-                    " USING next_item"
-                    " WHERE queue.id = next_item.id"
-                    " RETURNING next_item.source_kind, next_item.observed_at, next_item.metadata, next_item.payload"
-                ).format(queue_table=sql.Identifier(self.queue_table))
+                    " USING next_items"
+                    " WHERE queue.id = next_items.id"
+                    " RETURNING next_items.source_kind, next_items.observed_at, next_items.metadata, next_items.payload"
+                ).format(queue_table=sql.Identifier(self.queue_table)),
+                (batch_size,),
             )
-            return cursor.fetchone()
+            return cursor.fetchall()
 
-    def upsert_message(self, observed_at, source_kind: str, message_payload: dict):
+    def _prepare_message_row(self, observed_at, source_kind: str, message_payload: dict):
         message_id = int(message_payload["id"])
         channel_id = int(message_payload["channel_id"])
         guild_id = message_payload.get("guild_id")
@@ -101,9 +102,105 @@ class DatabaseExporter:
         author_id = int(message_payload["author"]["id"])
         content = message_payload.get("content", "")
         created_at = snowflake_to_timestamp(message_id)
+        return (
+            message_id, channel_id, guild_id, author_id, content,
+            created_at, observed_at, source_kind, json.dumps(message_payload),
+        )
 
+    def _prepare_lookup_rows(self, observed_at, message_payload: dict):
+        author = message_payload.get("author")
+        if not isinstance(author, dict) or "id" not in author:
+            return None, None, None
+        channel_id_value = message_payload.get("channel_id")
+        if channel_id_value is None:
+            return None, None, None
+        try:
+            channel_id = int(channel_id_value)
+            author_id = int(author["id"])
+        except (TypeError, ValueError):
+            return None, None, None
+
+        guild_id_value = message_payload.get("guild_id")
+        guild_id = None
+        if guild_id_value is not None:
+            try:
+                guild_id = int(guild_id_value)
+            except (TypeError, ValueError):
+                pass
+        guild_data = message_payload.get("guild") if isinstance(message_payload.get("guild"), dict) else None
+        channel_data = message_payload.get("channel") if isinstance(message_payload.get("channel"), dict) else None
+
+        guild_row = None
+        if guild_id is not None:
+            guild_name = guild_data.get("name") if guild_data is not None else None
+            guild_icon = guild_data.get("icon") if guild_data is not None else None
+            raw_guild = json.dumps(guild_data) if guild_data is not None else None
+            guild_row = (guild_id, guild_name, guild_icon, raw_guild, observed_at, observed_at)
+
+        channel_name = channel_data.get("name") if channel_data is not None else None
+        channel_type = channel_data.get("type") if channel_data is not None else None
+        raw_channel = json.dumps(channel_data) if channel_data is not None else None
+        channel_row = (channel_id, guild_id, channel_name, channel_type, raw_channel, observed_at, observed_at)
+
+        author_row = (
+            author_id, author.get("username"), author.get("global_name"),
+            author.get("discriminator"), author.get("avatar"), author.get("bot"),
+            json.dumps(author), observed_at, observed_at,
+        )
+        return guild_row, channel_row, author_row
+
+    def flush_batch(self, message_rows, guild_rows, channel_rows, author_rows):
+        if not message_rows:
+            return
         with self.connection.cursor() as cursor:
-            cursor.execute(
+            if guild_rows:
+                cursor.executemany(
+                    sql.SQL(
+                        "INSERT INTO {guild_table}"
+                        " (guild_id, guild_name, icon, raw_guild, first_seen_at, last_seen_at)"
+                        " VALUES (%s, %s, %s, %s::jsonb, %s, %s)"
+                        " ON CONFLICT (guild_id) DO UPDATE SET"
+                        " guild_name = EXCLUDED.guild_name,"
+                        " icon = EXCLUDED.icon,"
+                        " raw_guild = EXCLUDED.raw_guild,"
+                        " last_seen_at = GREATEST({guild_table}.last_seen_at, EXCLUDED.last_seen_at)"
+                    ).format(guild_table=sql.Identifier(self.guild_table)),
+                    guild_rows,
+                )
+
+            cursor.executemany(
+                sql.SQL(
+                    "INSERT INTO {channel_table}"
+                    " (channel_id, guild_id, channel_name, channel_type, raw_channel, first_seen_at, last_seen_at)"
+                    " VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s)"
+                    " ON CONFLICT (channel_id) DO UPDATE SET"
+                    " guild_id = EXCLUDED.guild_id,"
+                    " channel_name = EXCLUDED.channel_name,"
+                    " channel_type = EXCLUDED.channel_type,"
+                    " raw_channel = EXCLUDED.raw_channel,"
+                    " last_seen_at = GREATEST({channel_table}.last_seen_at, EXCLUDED.last_seen_at)"
+                ).format(channel_table=sql.Identifier(self.channel_table)),
+                channel_rows,
+            )
+
+            cursor.executemany(
+                sql.SQL(
+                    "INSERT INTO {author_table}"
+                    " (author_id, username, global_name, discriminator, avatar, is_bot, raw_author, first_seen_at, last_seen_at)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)"
+                    " ON CONFLICT (author_id) DO UPDATE SET"
+                    " username = EXCLUDED.username,"
+                    " global_name = EXCLUDED.global_name,"
+                    " discriminator = EXCLUDED.discriminator,"
+                    " avatar = EXCLUDED.avatar,"
+                    " is_bot = EXCLUDED.is_bot,"
+                    " raw_author = EXCLUDED.raw_author,"
+                    " last_seen_at = GREATEST({author_table}.last_seen_at, EXCLUDED.last_seen_at)"
+                ).format(author_table=sql.Identifier(self.author_table)),
+                author_rows,
+            )
+
+            cursor.executemany(
                 sql.SQL(
                     "INSERT INTO {message_table}"
                     " (message_id, channel_id, guild_id, author_id, content, created_at, observed_at, source_kind, raw_message)"
@@ -118,116 +215,10 @@ class DatabaseExporter:
                     " source_kind = EXCLUDED.source_kind,"
                     " raw_message = EXCLUDED.raw_message"
                 ).format(message_table=sql.Identifier(self.message_table)),
-                (
-                    message_id,
-                    channel_id,
-                    guild_id,
-                    author_id,
-                    content,
-                    created_at,
-                    observed_at,
-                    source_kind,
-                    json.dumps(message_payload),
-                ),
+                message_rows,
             )
 
-    def upsert_message_lookups(self, observed_at, message_payload: dict):
-        guild_id_value = message_payload.get("guild_id")
-        guild = message_payload.get("guild")
-        channel = message_payload.get("channel")
-        author = message_payload.get("author")
-        if not isinstance(author, dict) or "id" not in author:
-            return
-        channel_id_value = message_payload.get("channel_id")
-        if channel_id_value is None:
-            return
-        try:
-            channel_id = int(channel_id_value)
-            author_id = int(author["id"])
-        except (TypeError, ValueError):
-            return
-        guild_id = None
-        if guild_id_value is not None:
-            try:
-                guild_id = int(guild_id_value)
-            except (TypeError, ValueError):
-                pass
-        guild_data = guild if isinstance(guild, dict) else None
-        channel_data = channel if isinstance(channel, dict) else None
-
-        with self.connection.cursor() as cursor:
-            if guild_id is not None:
-                guild_name = guild_data.get("name") if guild_data is not None else None
-                guild_icon = guild_data.get("icon") if guild_data is not None else None
-                raw_guild = json.dumps(guild_data) if guild_data is not None else None
-                cursor.execute(
-                    sql.SQL(
-                        "INSERT INTO {guild_table}"
-                        " (guild_id, guild_name, icon, raw_guild, first_seen_at, last_seen_at)"
-                        " VALUES (%s, %s, %s, %s::jsonb, %s, %s)"
-                        " ON CONFLICT (guild_id) DO UPDATE SET"
-                        " guild_name = EXCLUDED.guild_name,"
-                        " icon = EXCLUDED.icon,"
-                        " raw_guild = EXCLUDED.raw_guild,"
-                        " last_seen_at = GREATEST({guild_table}.last_seen_at, EXCLUDED.last_seen_at)"
-                    ).format(guild_table=sql.Identifier(self.guild_table)),
-                    (guild_id, guild_name, guild_icon, raw_guild, observed_at, observed_at),
-                )
-
-            channel_name = channel_data.get("name") if channel_data is not None else None
-            channel_type = channel_data.get("type") if channel_data is not None else None
-            raw_channel = json.dumps(channel_data) if channel_data is not None else None
-            cursor.execute(
-                sql.SQL(
-                    "INSERT INTO {channel_table}"
-                    " (channel_id, guild_id, channel_name, channel_type, raw_channel, first_seen_at, last_seen_at)"
-                    " VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s)"
-                    " ON CONFLICT (channel_id) DO UPDATE SET"
-                    " guild_id = EXCLUDED.guild_id,"
-                    " channel_name = EXCLUDED.channel_name,"
-                    " channel_type = EXCLUDED.channel_type,"
-                    " raw_channel = EXCLUDED.raw_channel,"
-                    " last_seen_at = GREATEST({channel_table}.last_seen_at, EXCLUDED.last_seen_at)"
-                ).format(channel_table=sql.Identifier(self.channel_table)),
-                (
-                    channel_id,
-                    guild_id,
-                    channel_name,
-                    channel_type,
-                    raw_channel,
-                    observed_at,
-                    observed_at,
-                ),
-            )
-
-            cursor.execute(
-                sql.SQL(
-                    "INSERT INTO {author_table}"
-                    " (author_id, username, global_name, discriminator, avatar, is_bot, raw_author, first_seen_at, last_seen_at)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)"
-                    " ON CONFLICT (author_id) DO UPDATE SET"
-                    " username = EXCLUDED.username,"
-                    " global_name = EXCLUDED.global_name,"
-                    " discriminator = EXCLUDED.discriminator,"
-                    " avatar = EXCLUDED.avatar,"
-                    " is_bot = EXCLUDED.is_bot,"
-                    " raw_author = EXCLUDED.raw_author,"
-                    " last_seen_at = GREATEST({author_table}.last_seen_at, EXCLUDED.last_seen_at)"
-                ).format(author_table=sql.Identifier(self.author_table)),
-                (
-                    author_id,
-                    author.get("username"),
-                    author.get("global_name"),
-                    author.get("discriminator"),
-                    author.get("avatar"),
-                    author.get("bot"),
-                    json.dumps(author),
-                    observed_at,
-                    observed_at,
-                ),
-            )
-
-    def parse_rest_messages(self, observed_at, metadata, payload):
+    def collect_rest_messages(self, observed_at, metadata, payload, message_rows, guild_rows, channel_rows, author_rows):
         request_url = (metadata or {}).get("url", "")
         match = REST_MESSAGES_URL_PATTERN.match(request_url)
         if not match:
@@ -246,10 +237,15 @@ class DatabaseExporter:
             if not isinstance(message, dict) or "id" not in message or "author" not in message:
                 continue
             message.setdefault("channel_id", channel_id)
-            self.upsert_message_lookups(observed_at, message)
-            self.upsert_message(observed_at, "rest_response", message)
+            guild_row, channel_row, author_row = self._prepare_lookup_rows(observed_at, message)
+            if channel_row is not None:
+                if guild_row is not None:
+                    guild_rows.append(guild_row)
+                channel_rows.append(channel_row)
+                author_rows.append(author_row)
+            message_rows.append(self._prepare_message_row(observed_at, "rest_response", message))
 
-    def parse_gateway_message_create(self, observed_at, payload):
+    def collect_gateway_message_create(self, observed_at, payload, message_rows, guild_rows, channel_rows, author_rows):
         try:
             decoded_payload = payload.decode("utf-8", errors="strict")
             gateway_event = json.loads(decoded_payload)
@@ -263,33 +259,58 @@ class DatabaseExporter:
             return
         if "id" not in message_data or "author" not in message_data or "channel_id" not in message_data:
             return
-        self.upsert_message_lookups(observed_at, message_data)
-        self.upsert_message(observed_at, "gateway_chunk", message_data)
+        guild_row, channel_row, author_row = self._prepare_lookup_rows(observed_at, message_data)
+        if channel_row is not None:
+            if guild_row is not None:
+                guild_rows.append(guild_row)
+            channel_rows.append(channel_row)
+            author_rows.append(author_row)
+        message_rows.append(self._prepare_message_row(observed_at, "gateway_chunk", message_data))
 
-    def process_queue_item(self, source_kind, observed_at, metadata, payload):
-        if source_kind == "rest_response":
-            self.parse_rest_messages(observed_at, metadata, payload)
-            return
-        if source_kind == "gateway_chunk":
-            self.parse_gateway_message_create(observed_at, payload)
+    def process_queue_batch(self, queue_items):
+        message_rows = []
+        guild_rows = []
+        channel_rows = []
+        author_rows = []
+        for source_kind, observed_at, metadata, payload in queue_items:
+            if source_kind == "rest_response":
+                self.collect_rest_messages(observed_at, metadata, payload, message_rows, guild_rows, channel_rows, author_rows)
+            elif source_kind == "gateway_chunk":
+                self.collect_gateway_message_create(observed_at, payload, message_rows, guild_rows, channel_rows, author_rows)
+        self.flush_batch(message_rows, guild_rows, channel_rows, author_rows)
+
+    def _setup_listen(self):
+        self.connection.execute("LISTEN raw_message_queue_channel")
 
     def run_forever(self):
         logger.info("DB exporter started (queue table: %s)", self.queue_table)
+        self._setup_listen()
         while True:
             try:
-                queue_item = None
+                queue_items = None
                 with self.connection.transaction():
-                    queue_item = self.pop_queue_item()
-                    if queue_item is not None:
-                        self.process_queue_item(*queue_item)
-                if queue_item is None:
-                    time.sleep(self.poll_interval_seconds)
+                    queue_items = self.pop_queue_batch()
+                    if queue_items:
+                        self.process_queue_batch(queue_items)
+                if not queue_items:
+                    # Drain any pending notifications, then wait for the next one.
+                    # Use poll_interval_seconds as the timeout so we still
+                    # periodically re-check in case a notification was missed.
+                    for _notify in self.connection.notifies(
+                        timeout=self.poll_interval_seconds,
+                        stop_after=1,
+                    ):
+                        break
             except KeyboardInterrupt:
                 logger.info("DB exporter stopped")
                 return
             except Exception:
-                logger.exception("Failed while processing queue item")
+                logger.exception("Failed while processing queue batch")
                 self.reconnect()
+                try:
+                    self._setup_listen()
+                except Exception:
+                    logger.exception("Failed to re-establish LISTEN after reconnect")
                 time.sleep(self.poll_interval_seconds)
 
 
