@@ -176,7 +176,7 @@ class DatabaseExporter:
                 ).format(channel_table=sql.Identifier(self.channel_table)),
                 (
                     channel_id,
-                    int(guild_id) if guild_id is not None else None,
+                    guild_id,
                     channel_name,
                     channel_type,
                     raw_channel,
