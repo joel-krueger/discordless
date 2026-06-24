@@ -136,8 +136,10 @@ class DatabaseExporter:
         guild = message_payload.get("guild")
         channel = message_payload.get("channel")
         author = message_payload.get("author")
+        if not isinstance(author, dict) or "id" not in author:
+            return
         channel_id_value = message_payload.get("channel_id")
-        if not isinstance(author, dict) or "id" not in author or channel_id_value is None:
+        if channel_id_value is None:
             return
         try:
             channel_id = int(channel_id_value)
@@ -149,7 +151,7 @@ class DatabaseExporter:
             try:
                 guild_id = int(guild_id_value)
             except (TypeError, ValueError):
-                guild_id = None
+                pass
         guild_data = guild if isinstance(guild, dict) else None
         channel_data = channel if isinstance(channel, dict) else None
 
