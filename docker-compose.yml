@@ -20,7 +20,7 @@ services:
   db-exporter:
     build: .
     restart: unless-stopped
-    command: python db_exporter.py
+    command: python exporters/db_exporter.py
     environment:
       - DISCORDLESS_DB_HOST
       - DISCORDLESS_DB_PORT

@@ -255,7 +255,17 @@ class DiscordArchiver:
             
             filename = safe_filename(str(len(self.recorded_response_hashes)) + "_" + url[8:].rsplit("?", maxsplit=1)[0])
             log_info("Archiving {} to {}.".format(url, filename))
-            
+
+            try:
+                self.queue_publisher.enqueue(
+                    source_kind="rest_response",
+                    observed_timestamp=flow.response.timestamp_start,
+                    payload=flow.response.content,
+                    metadata={"url": url, "method": flow.request.method, "filename": filename},
+                )
+            except Exception as error:
+                log_info("Queueing failed for {}: {}.".format(url, error))
+
             with open(os.path.join(self.requests_path, filename), "wb") as file:
                 file.write(flow.response.content)
 
@@ -271,12 +281,6 @@ class DiscordArchiver:
                 ) + "\n"
             )
             self.recorded_response_hashes.add((url, response_hash))
-            self.queue_publisher.enqueue(
-                source_kind="rest_response",
-                observed_timestamp=flow.response.timestamp_start,
-                payload=flow.response.content,
-                metadata={"url": url, "method": flow.request.method, "filename": filename},
-            )
 
     """
     Select which requests should be "streamed".

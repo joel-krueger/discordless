@@ -192,6 +192,7 @@ Although you can connect multiple devices to the same Wumpus In The Middle insta
 - `exporter.py` calls different exporter backend in `exporters`
     -  `exporters/html` contains all files related to the html exporter.
     -  `exporters/dcejson` contains all files related to the dcejson exporter
+    -  `exporters/db_exporter.py` contains the PostgreSQL queue consumer/exporter worker
     -  `exporters/parse_gateway.py` and `exporters/registry.py` contain utilities for individual exporters
 - `dcejson_exports` and `html_exports` hold the exported dcejson respectively html files from exports
 - All files containing "docker" in some form are related to the docker image
