@@ -151,9 +151,9 @@ class DatabaseExporter:
                         " (guild_id, guild_name, icon, raw_guild, first_seen_at, last_seen_at)"
                         " VALUES (%s, %s, %s, %s::jsonb, %s, %s)"
                         " ON CONFLICT (guild_id) DO UPDATE SET"
-                        " guild_name = COALESCE(EXCLUDED.guild_name, {guild_table}.guild_name),"
-                        " icon = COALESCE(EXCLUDED.icon, {guild_table}.icon),"
-                        " raw_guild = COALESCE(EXCLUDED.raw_guild, {guild_table}.raw_guild),"
+                        " guild_name = EXCLUDED.guild_name,"
+                        " icon = EXCLUDED.icon,"
+                        " raw_guild = EXCLUDED.raw_guild,"
                         " last_seen_at = GREATEST({guild_table}.last_seen_at, EXCLUDED.last_seen_at)"
                     ).format(guild_table=sql.Identifier(self.guild_table)),
                     (guild_id, guild_name, guild_icon, raw_guild, observed_at, observed_at),
@@ -168,10 +168,10 @@ class DatabaseExporter:
                     " (channel_id, guild_id, channel_name, channel_type, raw_channel, first_seen_at, last_seen_at)"
                     " VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s)"
                     " ON CONFLICT (channel_id) DO UPDATE SET"
-                    " guild_id = COALESCE(EXCLUDED.guild_id, {channel_table}.guild_id),"
-                    " channel_name = COALESCE(EXCLUDED.channel_name, {channel_table}.channel_name),"
-                    " channel_type = COALESCE(EXCLUDED.channel_type, {channel_table}.channel_type),"
-                    " raw_channel = COALESCE(EXCLUDED.raw_channel, {channel_table}.raw_channel),"
+                    " guild_id = EXCLUDED.guild_id,"
+                    " channel_name = EXCLUDED.channel_name,"
+                    " channel_type = EXCLUDED.channel_type,"
+                    " raw_channel = EXCLUDED.raw_channel,"
                     " last_seen_at = GREATEST({channel_table}.last_seen_at, EXCLUDED.last_seen_at)"
                 ).format(channel_table=sql.Identifier(self.channel_table)),
                 (
@@ -191,12 +191,12 @@ class DatabaseExporter:
                     " (author_id, username, global_name, discriminator, avatar, is_bot, raw_author, first_seen_at, last_seen_at)"
                     " VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)"
                     " ON CONFLICT (author_id) DO UPDATE SET"
-                    " username = COALESCE(EXCLUDED.username, {author_table}.username),"
-                    " global_name = COALESCE(EXCLUDED.global_name, {author_table}.global_name),"
-                    " discriminator = COALESCE(EXCLUDED.discriminator, {author_table}.discriminator),"
-                    " avatar = COALESCE(EXCLUDED.avatar, {author_table}.avatar),"
-                    " is_bot = COALESCE(EXCLUDED.is_bot, {author_table}.is_bot),"
-                    " raw_author = COALESCE(EXCLUDED.raw_author, {author_table}.raw_author),"
+                    " username = EXCLUDED.username,"
+                    " global_name = EXCLUDED.global_name,"
+                    " discriminator = EXCLUDED.discriminator,"
+                    " avatar = EXCLUDED.avatar,"
+                    " is_bot = EXCLUDED.is_bot,"
+                    " raw_author = EXCLUDED.raw_author,"
                     " last_seen_at = GREATEST({author_table}.last_seen_at, EXCLUDED.last_seen_at)"
                 ).format(author_table=sql.Identifier(self.author_table)),
                 (
