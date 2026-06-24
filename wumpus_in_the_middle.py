@@ -95,6 +95,9 @@ def log_info(message):
     ctx.log.info("☎️  Wumpus In The Middle: " + message)
 
 
+QUEUE_NOTIFY_CHANNEL = "raw_message_queue_channel"
+
+
 class QueuePublisher:
     REQUIRED_ENVIRONMENT_VARIABLES = (
         "DISCORDLESS_DB_HOST",
@@ -156,6 +159,7 @@ class QueuePublisher:
                     ).format(sql.Identifier(self.queue_table)),
                     (source_kind, observed_timestamp, json.dumps(metadata), payload),
                 )
+                cursor.execute("SELECT pg_notify(%s, '')", (QUEUE_NOTIFY_CHANNEL,))
         except Exception as error:
             log_info(
                 f"Failed to enqueue '{source_kind}' record at {observed_timestamp} "

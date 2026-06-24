@@ -6,6 +6,3 @@ CREATE TABLE IF NOT EXISTS raw_message_queue (
     payload BYTEA NOT NULL,
     enqueued_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-CREATE INDEX IF NOT EXISTS raw_message_queue_enqueued_at_idx
-    ON raw_message_queue (enqueued_at);
