@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 env_file="$script_dir/.env"
 log_file="$script_dir/discordless_mitm.log"
+pid_file="$script_dir/discordless_mitm.pid"
 allow_hosts='^(((.+\.)?discord\.com)|((.+\.)?discordapp\.com)|((.+\.)?discord\.net)|((.+\.)?discordapp\.net)|((.+\.)?discord\.gg))(?::\d+)?$'
 
 if [[ -f "$env_file" ]]; then
@@ -23,4 +24,7 @@ nohup mitmweb \
   --allow-hosts "$allow_hosts" \
   >"$log_file" 2>&1 &
 
-echo "Started mitmweb in the background (PID $!). Logs: $log_file"
+pid="$!"
+echo "$pid" >"$pid_file"
+
+echo "Started mitmweb in the background (PID $pid). Logs: $log_file. PID file: $pid_file"
