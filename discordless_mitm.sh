@@ -13,11 +13,13 @@ if [[ -f "$env_file" ]]; then
   set +a
 fi
 
+: "${MITM_WEB_PASSWORD:?MITM_WEB_PASSWORD must be set in .env or the environment}"
+
 nohup mitmweb \
   -s "$script_dir/wumpus_in_the_middle.py" \
   --listen-port=8080 \
   --set console_eventlog_verbosity=debug \
-  --set "web_password=${mitm_web_password:-}" \
+  --set "web_password=${MITM_WEB_PASSWORD}" \
   --allow-hosts "$allow_hosts" \
   >"$log_file" 2>&1 &
 
