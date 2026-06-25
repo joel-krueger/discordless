@@ -1,4 +1,4 @@
-"""
+r"""
 Mitmproxy addon to record incoming Discord client traffic,
 from both Discord's REST API and "Gateway" (Websocket) API.
 
