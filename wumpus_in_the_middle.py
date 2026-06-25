@@ -179,19 +179,23 @@ Archives Gateway payloads for a single Gateway connection.
 """
 class Gatekeeper:
     def __init__(self, data_path, timeline_path):
-        self.data_file = open(data_path, "xb") # Every payload we get from the Gateway, concatenated.
-        self.timeline_file = open(timeline_path, "x") # Tracks when we got the Gateway payloads. Each line: {timestamp} {number of bytes received at that time}
+        self.data_path = data_path
+        self.timeline_path = timeline_path
+        # Create the files exclusively (fail if they already exist), then close immediately.
+        open(data_path, "xb").close()
+        open(timeline_path, "x").close()
 
     """
     Save Gateway payload.
     """
     def save(self, message):
-        payload_length = self.data_file.write(message.content)
-        self.timeline_file.write("{} {}\n".format(message.timestamp, payload_length))
+        with open(self.data_path, "ab") as data_file:
+            payload_length = data_file.write(message.content)
+        with open(self.timeline_path, "a") as timeline_file:
+            timeline_file.write("{} {}\n".format(message.timestamp, payload_length))
     
     def done(self):
-        self.data_file.close()
-        self.timeline_file.close()
+        pass
         
 class DiscordArchiver:
     def __init__(self):
@@ -203,18 +207,20 @@ class DiscordArchiver:
         os.makedirs(self.requests_path, exist_ok=True)
         os.makedirs(self.gateways_path, exist_ok=True)
 
-        # open the index files in line buffering mode: after a line is written, changes are flushed to the disk
-        self.request_index_file = open(os.path.join(self.archive_path, "request_index"), "a+", buffering=1) # each line: {timestamp} {method} {url} {response hash} {filename}
-        self.gateway_index_file = open(os.path.join(self.archive_path, "gateway_index"), "a+", buffering=1) # each line: {timestamp} {url} {gateway filename w/o _data or _timeline}
-        self.request_index_file.seek(0)
-        self.gateway_index_file.seek(0)
-        
-        self.recorded_response_hashes = set() # {(url, hash),...}
-        for line in self.request_index_file:
-            _timestamp, _method, url, response_hash, _filename = line.rstrip().split(maxsplit=4)
-            self.recorded_response_hashes.add((url, response_hash))
+        self.request_index_path = os.path.join(self.archive_path, "request_index") # each line: {timestamp} {method} {url} {response hash} {filename}
+        self.gateway_index_path = os.path.join(self.archive_path, "gateway_index") # each line: {timestamp} {url} {gateway filename w/o _data or _timeline}
 
-        self.recorded_gateways_count = max((int(line.split(" ")[-1])+1 for line in self.gateway_index_file),default=0) # find first unused gateway id
+        self.recorded_response_hashes = set() # {(url, hash),...}
+        if os.path.exists(self.request_index_path):
+            with open(self.request_index_path, "r") as f:
+                for line in f:
+                    _timestamp, _method, url, response_hash, _filename = line.rstrip().split(maxsplit=4)
+                    self.recorded_response_hashes.add((url, response_hash))
+
+        self.recorded_gateways_count = 0
+        if os.path.exists(self.gateway_index_path):
+            with open(self.gateway_index_path, "r") as f:
+                self.recorded_gateways_count = max((int(line.split(" ")[-1])+1 for line in f), default=0) # find first unused gateway id
         self.gatekeepers = {}
         self.queue_publisher = QueuePublisher()
 
@@ -235,9 +241,10 @@ class DiscordArchiver:
                 os.path.join(self.gateways_path, gateway_filename_prefix + "_data"),
                 os.path.join(self.gateways_path, gateway_filename_prefix + "_timeline"),
             )
-            self.gateway_index_file.write(
-                " ".join((str(flow.response.timestamp_start), flow.request.pretty_url, gateway_filename_prefix)) + "\n"
-            )
+            with open(self.gateway_index_path, "a") as f:
+                f.write(
+                    " ".join((str(flow.response.timestamp_start), flow.request.pretty_url, gateway_filename_prefix)) + "\n"
+                )
             
         log_info("Archiving Gateway message.")
         self.gatekeepers[flow].save(message)
@@ -273,17 +280,18 @@ class DiscordArchiver:
             with open(os.path.join(self.requests_path, filename), "wb") as file:
                 file.write(flow.response.content)
 
-            self.request_index_file.write(
-                " ".join(
-                    (
-                        str(flow.response.timestamp_start),
-                        flow.request.method,
-                        url,
-                        response_hash,
-                        filename
-                    )
-                ) + "\n"
-            )
+            with open(self.request_index_path, "a") as f:
+                f.write(
+                    " ".join(
+                        (
+                            str(flow.response.timestamp_start),
+                            flow.request.method,
+                            url,
+                            response_hash,
+                            filename
+                        )
+                    ) + "\n"
+                )
             self.recorded_response_hashes.add((url, response_hash))
 
     def _close_gatekeeper(self, flow: http.HTTPFlow):
@@ -311,8 +319,6 @@ class DiscordArchiver:
     
     def done(self):
             log_info("Closing files.")
-            self.request_index_file.close()
-            self.gateway_index_file.close()
             for gatekeeper in self.gatekeepers.values():
                 gatekeeper.done()
             self.queue_publisher.close()
