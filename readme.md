@@ -96,6 +96,8 @@ To enable PostgreSQL queueing + DB export in Docker Compose, set these environme
 - optional: `DISCORDLESS_DB_CHANNELS_TABLE` (defaults to `discord_channels`)
 - optional: `DISCORDLESS_DB_GUILDS_TABLE` (defaults to `discord_guilds`)
 
+You can copy `.env.sample` to `.env` and adjust the values there.
+
 Then run the SQL setup scripts in `/sql` against your database.
 `sql/002_create_discord_content_tables.sql` creates both `discord_messages` and lookup tables for readable IDs (`discord_authors`, `discord_channels`, `discord_guilds`), which the DB exporter keeps up to date as data is observed.
 
@@ -104,6 +106,8 @@ Then run the SQL setup scripts in `/sql` against your database.
 ## Step one: data collection - Debian based Linux
 
 Start the proxy server: `mitmdump -s wumpus_in_the_middle.py --listen-port=8080 --allow-hosts '^(((.+\.)?discord\.com)|((.+\.)?discordapp\.com)|((.+\.)?discord\.net)|((.+\.)?discordapp\.net)|((.+\.)?discord\.gg))(?::\d+)?$'`
+
+If you want mitm's web UI and background startup, copy `.env.sample` to `.env`, set `mitm_web_password`, and run `./discordless_mitm.sh`.
 
 (For Docker users, as long as your server is up, you do not need to run this.)
 
