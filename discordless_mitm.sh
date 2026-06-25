@@ -17,7 +17,7 @@ fi
 
 nohup mitmweb \
   -s "$script_dir/wumpus_in_the_middle.py" \
-  --listen-port=8080 \
+  --listen-port="${MITM_LISTEN_PORT:-8080}" \
   --set console_eventlog_verbosity=debug \
   --set "web_password=${MITM_WEB_PASSWORD}" \
   --allow-hosts "$allow_hosts" \
