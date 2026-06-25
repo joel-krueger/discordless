@@ -24,7 +24,16 @@ if [[ ! -x "$venv_python" ]]; then
   python3 -m venv "$venv_dir"
 fi
 
-"$venv_pip" install mitmproxy "psycopg[binary]"
+should_install_deps=false
+if [[ ! -x "$venv_mitmweb" ]]; then
+  should_install_deps=true
+elif ! "$venv_python" -c "import psycopg" >/dev/null 2>&1; then
+  should_install_deps=true
+fi
+
+if [[ "$should_install_deps" == true ]]; then
+  "$venv_pip" install mitmproxy "psycopg[binary]"
+fi
 
 nohup "$venv_mitmweb" \
   -s "$script_dir/wumpus_in_the_middle.py" \
