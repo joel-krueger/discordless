@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.env
 
 dcejson_exports/
 html_exports*/
@@ -11,6 +12,7 @@ traffic_archive*/
 *.zip
 scrapped*
 metrics.txt
+discordless_mitm.log
 mitmproxy
 mitmdump
 mitmweb
