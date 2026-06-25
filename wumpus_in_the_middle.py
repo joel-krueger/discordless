@@ -286,13 +286,15 @@ class DiscordArchiver:
             )
             self.recorded_response_hashes.add((url, response_hash))
 
-    def websocket_end(self, flow: http.HTTPFlow):
+    def _close_gatekeeper(self, flow: http.HTTPFlow):
         if flow in self.gatekeepers:
             self.gatekeepers.pop(flow).done()
 
+    def websocket_end(self, flow: http.HTTPFlow):
+        self._close_gatekeeper(flow)
+
     def websocket_error(self, flow: http.HTTPFlow):
-        if flow in self.gatekeepers:
-            self.gatekeepers.pop(flow).done()
+        self._close_gatekeeper(flow)
 
     """
     Select which requests should be "streamed".
