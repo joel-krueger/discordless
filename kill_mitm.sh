@@ -15,6 +15,11 @@ if [[ -z "$pid" ]]; then
   exit 1
 fi
 
+if [[ ! "$pid" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid PID in $pid_file: $pid"
+  exit 1
+fi
+
 if ! kill -0 "$pid" 2>/dev/null; then
   echo "No running process found for PID $pid."
   rm -f "$pid_file"
@@ -22,5 +27,26 @@ if ! kill -0 "$pid" 2>/dev/null; then
 fi
 
 kill "$pid"
-rm -f "$pid_file"
-echo "Stopped mitmweb process $pid and removed PID file."
+
+for _ in {1..10}; do
+  if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pid_file"
+    echo "Stopped mitmweb process $pid and removed PID file."
+    exit 0
+  fi
+  sleep 0.2
+done
+
+echo "Process $pid did not stop after SIGTERM; sending SIGKILL."
+kill -9 "$pid"
+for _ in {1..10}; do
+  if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pid_file"
+    echo "Stopped mitmweb process $pid with SIGKILL and removed PID file."
+    exit 0
+  fi
+  sleep 0.2
+done
+
+echo "Failed to stop process $pid."
+exit 1
