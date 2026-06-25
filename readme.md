@@ -107,7 +107,7 @@ Then run the SQL setup scripts in `/sql` against your database.
 
 Start the proxy server: `mitmdump -s wumpus_in_the_middle.py --listen-port=8080 --allow-hosts '^(((.+\.)?discord\.com)|((.+\.)?discordapp\.com)|((.+\.)?discord\.net)|((.+\.)?discordapp\.net)|((.+\.)?discord\.gg))(?::\d+)?$'`
 
-If you want mitm's web UI and background startup, copy `.env.sample` to `.env`, set `MITM_WEB_PASSWORD`, optionally change `MITM_LISTEN_PORT`, and run `./discordless_mitm.sh`.
+If you want mitm's web UI and background startup, copy `.env.sample` to `.env`, set `MITM_WEB_PASSWORD`, optionally change `MITM_LISTEN_PORT`, and run `./discordless_mitm.sh`. This script creates and uses a dedicated mitmproxy virtualenv at `~/mitmproxy-venv` (or `$MITM_VENV_DIR` if set).
 
 (For Docker users, as long as your server is up, you do not need to run this.)
 
